@@ -57,6 +57,7 @@ BSD license, check license.txt for more information
 
 #include "Adafruit_GFX.h"
 #include "Arduino.h"
+#include "gamma.h"
 #include <SPI.h>
 
 #if defined(ARDUINO) && ARDUINO >= 100
@@ -167,6 +168,9 @@ class PxMATRIX : public Adafruit_GFX {
 
   // Converts RGB888 to RGB565
   uint16_t color565(uint8_t r, uint8_t g, uint8_t b);
+  
+  // Converts HSV to RGB565
+  uint16_t colorHSV(long hue, uint8_t sat, uint8_t val, boolean gflag);
 
   // Helpful for debugging (place in display update loop)
   inline void displayTestPattern(uint16_t showtime);
@@ -323,6 +327,49 @@ inline void fm612xWriteRegister(uint16_t reg_value, uint8_t reg_position);
 // Pass 8-bit (each) R,G,B, get back 16-bit packed color
 inline uint16_t PxMATRIX::color565(uint8_t r, uint8_t g, uint8_t b) {
   return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+}
+
+uint16_t PxMATRIX::colorHSV(long hue, uint8_t sat, uint8_t val, boolean gflag) {
+
+  uint8_t  r, g, b, lo;
+  uint16_t s1, v1;
+
+  // Hue
+  hue %= 1536;             // -1535 to +1535
+  if(hue < 0) hue += 1536; //     0 to +1535
+  lo = hue & 255;          // Low byte  = primary/secondary color mix
+  switch(hue >> 8) {       // High byte = sextant of colorwheel
+    case 0 : r = 255     ; g =  lo     ; b =   0     ; break; // R to Y
+    case 1 : r = 255 - lo; g = 255     ; b =   0     ; break; // Y to G
+    case 2 : r =   0     ; g = 255     ; b =  lo     ; break; // G to C
+    case 3 : r =   0     ; g = 255 - lo; b = 255     ; break; // C to B
+    case 4 : r =  lo     ; g =   0     ; b = 255     ; break; // B to M
+    default: r = 255     ; g =   0     ; b = 255 - lo; break; // M to R
+  }
+
+  // Saturation: add 1 so range is 1 to 256, allowig a quick shift operation
+  // on the result rather than a costly divide, while the type upgrade to int
+  // avoids repeated type conversions in both directions.
+  s1 = sat + 1;
+  r  = 255 - (((255 - r) * s1) >> 8);
+  g  = 255 - (((255 - g) * s1) >> 8);
+  b  = 255 - (((255 - b) * s1) >> 8);
+
+  // Value (brightness) & 16-bit color reduction: similar to above, add 1
+  // to allow shifts, and upgrade to int makes other conversions implicit.
+  v1 = val + 1;
+  if(gflag) { // Gamma-corrected color?
+    r = pgm_read_byte(&gamma_table[(r * v1) >> 8]); // Gamma correction table maps
+    g = pgm_read_byte(&gamma_table[(g * v1) >> 8]); // 8-bit input to 4-bit output
+    b = pgm_read_byte(&gamma_table[(b * v1) >> 8]);
+  } else { // linear (uncorrected) color
+    r = (r * v1) >> 12; // 4-bit results
+    g = (g * v1) >> 12;
+    b = (b * v1) >> 12;
+  }
+  return (r << 12) | ((r & 0x8) << 8) | // 4/4/4 -> 5/6/5
+         (g <<  7) | ((g & 0xC) << 3) |
+         (b <<  1) | ( b        >> 3);
 }
 
 // Init code common to both constructors
